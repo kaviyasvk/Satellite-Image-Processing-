@@ -1,0 +1,138 @@
+import os
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+import matplotlib.pyplot as plt
+
+# ========================
+# PATH SETUP
+# ========================
+base_dir = r"C:\Users\kaviya\Downloads\archive (2)\8bit"
+cities = ["Vegas", "Shanghai", "Paris", "Khartoum"]
+
+# ========================
+# IMAGE LOADING FUNCTION
+# ========================
+def load_data(base_dir, cities, img_size=(128, 128)):
+    X, Y = [], []
+
+    for city in cities:
+        city_path = os.path.join(base_dir, city)
+
+        # Find image and mask folders dynamically
+        subfolders = [d.lower() for d in os.listdir(city_path)]
+        img_folder = None
+        mask_folder = None
+        for sub in subfolders:
+            if "image" in sub:
+                img_folder = sub
+            elif "mask" in sub:
+                mask_folder = sub
+
+        if not img_folder or not mask_folder:
+            print(f"⚠️ Skipping {city} (could not find 'images' or 'masks' folder)")
+            continue
+
+        img_dir = os.path.join(city_path, img_folder)
+        mask_dir = os.path.join(city_path, mask_folder)
+
+        img_files = sorted([f for f in os.listdir(img_dir) if f.lower().endswith(('.jpg', '.png', '.tif'))])
+        mask_files = sorted([f for f in os.listdir(mask_dir) if f.lower().endswith(('.jpg', '.png', '.tif'))])
+
+        print(f"📂 Loading {len(img_files)} images from {city}")
+
+        for img_file, mask_file in zip(img_files, mask_files):
+            img_path = os.path.join(img_dir, img_file)
+            mask_path = os.path.join(mask_dir, mask_file)
+
+            img = load_img(img_path, target_size=img_size)
+            mask = load_img(mask_path, target_size=img_size, color_mode="grayscale")
+
+            X.append(img_to_array(img) / 255.0)
+            Y.append(img_to_array(mask) / 255.0)
+
+    X = np.array(X)
+    Y = np.array(Y)
+
+    print(f"✅ Loaded {len(X)} image-mask pairs in total.")
+    return X, Y
+
+
+# ========================
+# LOAD DATA
+# ========================
+X, Y = load_data(base_dir, cities)
+
+if len(X) == 0:
+    raise ValueError("❌ No images loaded. Please check folder names inside each city (should have 'images' and 'masks').")
+
+# ========================
+# SPLIT DATA
+# ========================
+X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.2, random_state=42)
+
+# ========================
+# MODEL (U-Net)
+# ========================
+def build_unet(input_shape):
+    inputs = layers.Input(shape=input_shape)
+
+    # Encoder
+    c1 = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(inputs)
+    c1 = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(c1)
+    p1 = layers.MaxPooling2D((2, 2))(c1)
+
+    c2 = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(p1)
+    c2 = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(c2)
+    p2 = layers.MaxPooling2D((2, 2))(c2)
+
+    c3 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(p2)
+    c3 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(c3)
+
+    # Decoder
+    u1 = layers.UpSampling2D((2, 2))(c3)
+    u1 = layers.concatenate([u1, c2])
+    c4 = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(u1)
+
+    u2 = layers.UpSampling2D((2, 2))(c4)
+    u2 = layers.concatenate([u2, c1])
+    c5 = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(u2)
+
+    outputs = layers.Conv2D(1, (1, 1), activation='sigmoid')(c5)
+
+    model = models.Model(inputs, outputs)
+    return model
+
+
+model = build_unet((128, 128, 3))
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.summary()
+
+# ========================
+# TRAIN MODEL
+# ========================
+history = model.fit(X_train, Y_train, validation_data=(X_val, Y_val), epochs=5, batch_size=8)
+
+# ========================
+# PREDICTION VISUALIZATION
+# ========================
+def show_results(model, X, Y, n=3):
+    preds = model.predict(X[:n])
+    plt.figure(figsize=(12, 6))
+    for i in range(n):
+        plt.subplot(n, 3, 3 * i + 1)
+        plt.imshow(X[i])
+        plt.title("Input")
+
+        plt.subplot(n, 3, 3 * i + 2)
+        plt.imshow(Y[i].squeeze(), cmap='gray')
+        plt.title("Ground Truth")
+
+        plt.subplot(n, 3, 3 * i + 3)
+        plt.imshow(preds[i].squeeze(), cmap='gray')
+        plt.title("Prediction")
+    plt.show()
+
+show_results(model, X_val, Y_val)
